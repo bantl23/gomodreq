@@ -1,20 +1,23 @@
 package main
 
 import (
+	"bytes"
+	"flag"
 	"fmt"
 	"io/ioutil"
+	"net/http"
+	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
+	"strings"
 
+	"golang.org/x/crypto/ssh"
 	"golang.org/x/mod/modfile"
 	"gopkg.in/yaml.v2"
 )
 
-const (
-	gomod = "go.mod"
-	goreq = "go.req"
-)
-
+// set by build flags
 var (
 	version = "v0.0.0"
 	commit  = "dev"
@@ -26,40 +29,135 @@ type Requirements struct {
 	Banned   map[string][]string `yaml:"banned,omitempty"`
 }
 
-func getData(filename string) ([]byte, error) {
-	_, err := os.Stat(filename)
+// getFileData gets data from a file
+func getFileData(uri *url.URL) ([]byte, error) {
+	_, err := os.Stat(uri.Path)
 	if os.IsNotExist(err) {
 		return nil, err
 	}
-
-	data, err := ioutil.ReadFile(filename)
+	data, err := ioutil.ReadFile(uri.Path)
 	if err != nil {
 		return nil, err
 	}
 	return data, nil
 }
 
-func getReqs() (*Requirements, error) {
-	reqs := new(Requirements)
-
-	data, err := getData(goreq)
+// getHTTPData gets data from a http resource
+func getHTTPData(uri *url.URL) ([]byte, error) {
+	client := http.Client{}
+	resp, err := client.Get(uri.String())
 	if err != nil {
 		return nil, err
 	}
-	err = yaml.Unmarshal(data, reqs)
+	defer resp.Body.Close()
+	b := &bytes.Buffer{}
+	_, err = b.ReadFrom(resp.Body)
 	if err != nil {
 		return nil, err
 	}
-
-	return reqs, nil
+	return b.Bytes(), nil
 }
 
-func getMod() (*modfile.File, error) {
-	data, err := getData(gomod)
+// getSSHData gets data from ssh resource
+func getSSHData(uri *url.URL) ([]byte, error) {
+	username := uri.User.Username()
+	password, pwOk := uri.User.Password()
+	hostname := uri.Host
+	if !strings.Contains(uri.Host, ":") {
+		hostname = hostname + ":22"
+	}
+
+	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
 	}
-	mod, err := modfile.Parse(gomod, data, nil)
+
+	key, err := ioutil.ReadFile(filepath.Join(homeDir, ".ssh", "id_rsa"))
+	if err != nil {
+		return nil, err
+	}
+	signer, err := ssh.ParsePrivateKey(key)
+	if err != nil {
+		return nil, err
+	}
+
+	auth := []ssh.AuthMethod{
+		ssh.PublicKeys(signer),
+	}
+	if pwOk == true {
+		auth = append(auth, ssh.Password(password))
+	}
+
+	config := &ssh.ClientConfig{
+		User:            username,
+		Auth:            auth,
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	}
+	client, err := ssh.Dial("tcp", hostname, config)
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+
+	session, err := client.NewSession()
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+
+	b, err := session.CombinedOutput("cat " + uri.Path)
+	if err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+func getData(uri *url.URL) ([]byte, error) {
+	var getDataFunc func(uri *url.URL) ([]byte, error)
+
+	switch uri.Scheme {
+	case "file":
+		getDataFunc = getFileData
+	case "http", "https":
+		getDataFunc = getHTTPData
+	case "ssh":
+		getDataFunc = getSSHData
+	default:
+		return nil, fmt.Errorf("Unsupported scheme: %s", uri.Scheme)
+	}
+
+	return getDataFunc(uri)
+}
+
+func getReq(loc string) (*Requirements, error) {
+	req := new(Requirements)
+
+	uri, err := url.ParseRequestURI(loc)
+	if err != nil {
+		return nil, err
+	}
+	data, err := getData(uri)
+	if err != nil {
+		return nil, err
+	}
+	err = yaml.Unmarshal(data, req)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+func getMod(loc string) (*modfile.File, error) {
+	uri, err := url.ParseRequestURI(loc)
+	if err != nil {
+		return nil, err
+	}
+	data, err := getData(uri)
+	if err != nil {
+		return nil, err
+	}
+	mod, err := modfile.Parse(uri.Path, data, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -67,73 +165,95 @@ func getMod() (*modfile.File, error) {
 	return mod, nil
 }
 
-func main() {
-	if len(os.Args) == 2 {
-		if os.Args[1] == "-v" || os.Args[1] == "--version" {
-			fmt.Printf("%s (%s)\n", version, commit)
-			os.Exit(0)
-		}
-		if os.Args[1] == "-h" || os.Args[1] == "--help" {
-			fmt.Println("Checks modules against requirements list")
-			os.Exit(0)
-		}
-	}
-
-	reqs, err := getReqs()
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-	mod, err := getMod()
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-
-	exitValue := 0
-
+func checkRequired(req *Requirements, mod *modfile.File) (int, error) {
+	exitCode := 0
 	for i := range mod.Require {
 		path := mod.Require[i].Mod.Path
 		modvers := mod.Require[i].Mod.Version
-		_, ok := reqs.Required[path]
+		_, ok := req.Required[path]
 		if ok == true {
-			re, err := regexp.Compile(reqs.Required[path])
+			re, err := regexp.Compile(req.Required[path])
 			if err != nil {
-				fmt.Printf("Error compiling regular expression: %s\n", reqs.Required[path])
-				os.Exit(1)
-			} else {
-				if !re.Match([]byte(modvers)) {
-					fmt.Printf("Error: package %s version %s does not met requirements [regex is %s]\n", path, modvers, reqs.Required[path])
-					exitValue = 1
-				}
+				return exitCode, err
 			}
-
+			if !re.Match([]byte(modvers)) {
+				fmt.Printf("Error: package %s version %s does not met requirements [regex is %s]\n", path, modvers, req.Required[path])
+				exitCode = 1
+			}
 		}
 	}
+	return exitCode, nil
+}
 
+func checkBanned(req *Requirements, mod *modfile.File) (int, error) {
+	exitCode := 0
 	for i := range mod.Require {
 		path := mod.Require[i].Mod.Path
 		modvers := mod.Require[i].Mod.Version
-		_, ok := reqs.Banned[path]
+		_, ok := req.Banned[path]
 		if ok == true {
-			for j := range reqs.Banned[path] {
-				re, err := regexp.Compile(reqs.Banned[path][j])
+			for j := range req.Banned[path] {
+				re, err := regexp.Compile(req.Banned[path][j])
 				if err != nil {
-					fmt.Printf("Error compiling regular expression: %s\n", reqs.Required[path])
-					os.Exit(1)
-				} else {
-					if re.Match([]byte(modvers)) {
-						fmt.Printf("Error: package %s version %s is banned [regex is %s]\n", path, modvers, reqs.Banned[path][j])
-						exitValue = 1
-					}
+					return exitCode, err
+				}
+				if re.Match([]byte(modvers)) {
+					fmt.Printf("Error: package %s version %s is banned [regex is %s]\n", path, modvers, req.Banned[path][j])
+					exitCode = 2
 				}
 			}
 		}
 	}
+	return exitCode, nil
+}
 
-	if exitValue == 0 {
-		fmt.Printf("All module requirements met")
+func mainWithExit() int {
+	path, err := os.Getwd()
+	if err != nil {
+		fmt.Println(err)
+		return -1
+	}
+	versFlag := flag.Bool("version", false, "print version and exit")
+	uriFlag := flag.String("uri", "file://"+path+"/.goreq.yml", "requirements file")
+	flag.Parse()
+
+	if *versFlag == true {
+		fmt.Printf("%s (%s)\n", version, commit)
+		return 0
 	}
 
-	os.Exit(exitValue)
+	modLoc := "file://" + path + "/go.mod"
+	reqLoc := *uriFlag
+
+	req, err := getReq(reqLoc)
+	if err != nil {
+		fmt.Println(err)
+		return -1
+	}
+	mod, err := getMod(modLoc)
+	if err != nil {
+		fmt.Println(err)
+		return -1
+	}
+
+	reqEC, err := checkRequired(req, mod)
+	if err != nil {
+		fmt.Println(err)
+		return -1
+	}
+	banEC, err := checkBanned(req, mod)
+	if err != nil {
+		fmt.Println(err)
+		return -1
+	}
+
+	if reqEC == 0 && banEC == 0 {
+		fmt.Println("All module requirements met")
+	}
+
+	return reqEC + banEC
+}
+
+func main() {
+	os.Exit(mainWithExit())
 }
