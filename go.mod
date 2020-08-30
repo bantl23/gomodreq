@@ -1,4 +1,4 @@
-module github.com/bantl23/goreq
+module github.com/bantl23/gomodreq
 
 go 1.14
 
