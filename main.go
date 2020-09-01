@@ -33,11 +33,11 @@ type Requirements struct {
 func getFileData(uri *url.URL) ([]byte, error) {
 	_, err := os.Stat(uri.Path)
 	if os.IsNotExist(err) {
-		return nil, err
+		return nil, fmt.Errorf("file does not exist %s [%+v]", uri.Path, err)
 	}
 	data, err := ioutil.ReadFile(uri.Path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("problem reading file %s [%+v]", uri.Path, err)
 	}
 	return data, nil
 }
@@ -47,13 +47,13 @@ func getHTTPData(uri *url.URL) ([]byte, error) {
 	client := http.Client{}
 	resp, err := client.Get(uri.String())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unable to get webpage %s [%+v]", uri.String(), err)
 	}
 	defer resp.Body.Close()
 	b := &bytes.Buffer{}
 	_, err = b.ReadFrom(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unable to read response from %s [%+v]", uri.String(), err)
 	}
 	return b.Bytes(), nil
 }
@@ -69,16 +69,17 @@ func getSSHData(uri *url.URL) ([]byte, error) {
 
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unable to get home directory for %s [%+v]", username, err)
 	}
 
-	key, err := ioutil.ReadFile(filepath.Join(homeDir, ".ssh", "id_rsa"))
+	identityFile := filepath.Join(homeDir, ".ssh", "id_rsa")
+	key, err := ioutil.ReadFile(identityFile)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unable to read identity file %s [%+v]", identityFile, err)
 	}
 	signer, err := ssh.ParsePrivateKey(key)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unable to parse identity file %s [%+v]", identityFile, err)
 	}
 
 	auth := []ssh.AuthMethod{
@@ -95,19 +96,19 @@ func getSSHData(uri *url.URL) ([]byte, error) {
 	}
 	client, err := ssh.Dial("tcp", hostname, config)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unable to connect to host %s [%+v]", hostname, err)
 	}
 	defer client.Close()
 
 	session, err := client.NewSession()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unable to create new ssh session [%+v]", err)
 	}
 	defer session.Close()
 
 	b, err := session.CombinedOutput("cat " + uri.Path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unable to get remote file contents %s [%+v]", uri.Path, err)
 	}
 	return b, nil
 }
@@ -123,7 +124,7 @@ func getData(uri *url.URL) ([]byte, error) {
 	case "ssh":
 		getDataFunc = getSSHData
 	default:
-		return nil, fmt.Errorf("Unsupported scheme: %s", uri.Scheme)
+		return nil, fmt.Errorf("Unsupported uri scheme: %s", uri.Scheme)
 	}
 
 	return getDataFunc(uri)
@@ -134,7 +135,7 @@ func getReq(loc string) (*Requirements, error) {
 
 	uri, err := url.ParseRequestURI(loc)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unable to parse uri %s [%+v]", uri, err)
 	}
 	data, err := getData(uri)
 	if err != nil {
@@ -142,7 +143,7 @@ func getReq(loc string) (*Requirements, error) {
 	}
 	err = yaml.Unmarshal(data, req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unable to parse requirements file %s [%+v]", uri, err)
 	}
 
 	return req, nil
@@ -151,7 +152,7 @@ func getReq(loc string) (*Requirements, error) {
 func getMod(loc string) (*modfile.File, error) {
 	uri, err := url.ParseRequestURI(loc)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unable to parse uri %s [%+v]", uri, err)
 	}
 	data, err := getData(uri)
 	if err != nil {
@@ -159,14 +160,13 @@ func getMod(loc string) (*modfile.File, error) {
 	}
 	mod, err := modfile.Parse(uri.Path, data, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unable to parse mod file %s [%+v]", uri, err)
 	}
 
 	return mod, nil
 }
 
-func checkRequired(req *Requirements, mod *modfile.File) (int, error) {
-	exitCode := 0
+func checkRequired(req *Requirements, mod *modfile.File, exitCode int) (int, error) {
 	for i := range mod.Require {
 		path := mod.Require[i].Mod.Path
 		modvers := mod.Require[i].Mod.Version
@@ -174,7 +174,7 @@ func checkRequired(req *Requirements, mod *modfile.File) (int, error) {
 		if ok == true {
 			re, err := regexp.Compile(req.Required[path])
 			if err != nil {
-				return exitCode, err
+				return exitCode, fmt.Errorf("unable to compile regex %s [%+v]", req.Required[path], err)
 			}
 			if !re.Match([]byte(modvers)) {
 				fmt.Printf("Error: package %s version %s does not met requirements [regex is %s]\n", path, modvers, req.Required[path])
@@ -185,8 +185,7 @@ func checkRequired(req *Requirements, mod *modfile.File) (int, error) {
 	return exitCode, nil
 }
 
-func checkBanned(req *Requirements, mod *modfile.File) (int, error) {
-	exitCode := 0
+func checkBanned(req *Requirements, mod *modfile.File, exitCode int) (int, error) {
 	for i := range mod.Require {
 		path := mod.Require[i].Mod.Path
 		modvers := mod.Require[i].Mod.Version
@@ -195,7 +194,7 @@ func checkBanned(req *Requirements, mod *modfile.File) (int, error) {
 			for j := range req.Banned[path] {
 				re, err := regexp.Compile(req.Banned[path][j])
 				if err != nil {
-					return exitCode, err
+					return exitCode, fmt.Errorf("unable to compile regex %s [%+v]", req.Banned[path][j], err)
 				}
 				if re.Match([]byte(modvers)) {
 					fmt.Printf("Error: package %s version %s is banned [regex is %s]\n", path, modvers, req.Banned[path][j])
@@ -210,7 +209,7 @@ func checkBanned(req *Requirements, mod *modfile.File) (int, error) {
 func mainWithExit() int {
 	path, err := os.Getwd()
 	if err != nil {
-		fmt.Println(err)
+		fmt.Println("Fatal: unable to get current directory")
 		return -1
 	}
 
@@ -232,41 +231,43 @@ func mainWithExit() int {
 	}
 
 	modLoc := "file://" + path + "/go.mod"
-	reqLoc := "file://" + path + "/.gomodreq.yml"
-	if len(os.Args) == 2 {
-		reqLoc = os.Args[1]
-	} else if len(os.Args) > 2 {
-		fmt.Println("only one mod req file")
-		return -1
+	reqLoc := os.Args[1:]
+	if len(reqLoc) == 0 {
+		reqLoc = []string{"file://" + path + "/.gomodreq.yml"}
 	}
 
-	req, err := getReq(reqLoc)
-	if err != nil {
-		fmt.Println(err)
-		return -1
-	}
 	mod, err := getMod(modLoc)
 	if err != nil {
 		fmt.Println(err)
 		return -1
 	}
 
-	reqEC, err := checkRequired(req, mod)
-	if err != nil {
-		fmt.Println(err)
-		return -1
-	}
-	banEC, err := checkBanned(req, mod)
-	if err != nil {
-		fmt.Println(err)
-		return -1
+	reqExitCode := 0
+	banExitCode := 0
+	for i := range reqLoc {
+		fmt.Printf("Checking %s\n", reqLoc[i])
+		req, err := getReq(reqLoc[i])
+		if err != nil {
+			fmt.Println(err)
+			return -1
+		}
+		reqExitCode, err = checkRequired(req, mod, reqExitCode)
+		if err != nil {
+			fmt.Println(err)
+			return -1
+		}
+		banExitCode, err = checkBanned(req, mod, banExitCode)
+		if err != nil {
+			fmt.Println(err)
+			return -1
+		}
 	}
 
-	if reqEC == 0 && banEC == 0 {
+	if reqExitCode == 0 && banExitCode == 0 {
 		fmt.Println("All module requirements met")
 	}
 
-	return reqEC + banEC
+	return reqExitCode + banExitCode
 }
 
 func main() {
