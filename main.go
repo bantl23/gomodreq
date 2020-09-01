@@ -15,6 +15,8 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/mod/modfile"
 	"gopkg.in/yaml.v2"
+
+	log "github.com/sirupsen/logrus"
 )
 
 // set by build flags
@@ -27,6 +29,14 @@ var (
 type Requirements struct {
 	Required map[string]string   `yaml:"required,omitempty"`
 	Banned   map[string][]string `yaml:"banned,omitempty"`
+}
+
+func init() {
+	log.SetFormatter(&log.TextFormatter{
+		DisableColors:    true,
+		DisableTimestamp: true,
+	})
+	log.SetReportCaller(true)
 }
 
 // getFileData gets data from a file
@@ -177,7 +187,7 @@ func checkRequired(req *Requirements, mod *modfile.File, exitCode int) (int, err
 				return exitCode, fmt.Errorf("unable to compile regex %s [%+v]", req.Required[path], err)
 			}
 			if !re.Match([]byte(modvers)) {
-				fmt.Printf("Error: package %s version %s does not met requirements [regex is %s]\n", path, modvers, req.Required[path])
+				log.Printf("Error: package %s version %s does not met requirements [regex is %s]\n", path, modvers, req.Required[path])
 				exitCode = 1
 			}
 		}
@@ -197,7 +207,7 @@ func checkBanned(req *Requirements, mod *modfile.File, exitCode int) (int, error
 					return exitCode, fmt.Errorf("unable to compile regex %s [%+v]", req.Banned[path][j], err)
 				}
 				if re.Match([]byte(modvers)) {
-					fmt.Printf("Error: package %s version %s is banned [regex is %s]\n", path, modvers, req.Banned[path][j])
+					log.Printf("Error: package %s version %s is banned [regex is %s]\n", path, modvers, req.Banned[path][j])
 					exitCode = 2
 				}
 			}
@@ -209,7 +219,7 @@ func checkBanned(req *Requirements, mod *modfile.File, exitCode int) (int, error
 func mainWithExit() int {
 	path, err := os.Getwd()
 	if err != nil {
-		fmt.Println("Fatal: unable to get current directory")
+		log.Fatal("Fatal: unable to get current directory")
 		return -1
 	}
 
@@ -238,33 +248,43 @@ func mainWithExit() int {
 
 	mod, err := getMod(modLoc)
 	if err != nil {
-		fmt.Println(err)
+		log.WithFields(log.Fields{
+			"err": err,
+		}).Fatal("getting modules")
 		return -1
 	}
 
 	reqExitCode := 0
 	banExitCode := 0
 	for i := range reqLoc {
-		fmt.Printf("Checking %s\n", reqLoc[i])
+		log.WithFields(log.Fields{
+			"uri": reqLoc[i],
+		}).Info("checking requirements")
 		req, err := getReq(reqLoc[i])
 		if err != nil {
-			fmt.Println(err)
+			log.WithFields(log.Fields{
+				"err": err,
+			}).Fatal("getting requirements")
 			return -1
 		}
 		reqExitCode, err = checkRequired(req, mod, reqExitCode)
 		if err != nil {
-			fmt.Println(err)
+			log.WithFields(log.Fields{
+				"err": err,
+			}).Fatal("checking required modules")
 			return -1
 		}
 		banExitCode, err = checkBanned(req, mod, banExitCode)
 		if err != nil {
-			fmt.Println(err)
+			log.WithFields(log.Fields{
+				"err": err,
+			}).Fatal("checking banned modules")
 			return -1
 		}
 	}
 
 	if reqExitCode == 0 && banExitCode == 0 {
-		fmt.Println("All module requirements met")
+		log.Info("All module requirements met")
 	}
 
 	return reqExitCode + banExitCode

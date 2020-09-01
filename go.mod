@@ -3,6 +3,7 @@ module github.com/bantl23/gomodreq
 go 1.14
 
 require (
+	github.com/sirupsen/logrus v1.6.0
 	golang.org/x/crypto v0.0.0-20191011191535-87dc89f01550
 	golang.org/x/mod v0.3.0
 	gopkg.in/yaml.v2 v2.3.0
