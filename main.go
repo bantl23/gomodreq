@@ -213,8 +213,17 @@ func mainWithExit() int {
 		fmt.Println(err)
 		return -1
 	}
+
+	flag.Usage = func() {
+		fmt.Fprintf(flag.CommandLine.Output(),
+			"Usage:\n%s <mod_req_uri> (default: file://%s/.gomodreq.yml):\n",
+			filepath.Base(os.Args[0]),
+			path,
+		)
+		flag.PrintDefaults()
+	}
+
 	versFlag := flag.Bool("version", false, "print version and exit")
-	uriFlag := flag.String("uri", "file://"+path+"/.goreq.yml", "requirements file")
 	flag.Parse()
 
 	if *versFlag == true {
@@ -223,7 +232,13 @@ func mainWithExit() int {
 	}
 
 	modLoc := "file://" + path + "/go.mod"
-	reqLoc := *uriFlag
+	reqLoc := "file://" + path + "/.gomodreq.yml"
+	if len(os.Args) == 2 {
+		reqLoc = os.Args[1]
+	} else if len(os.Args) > 2 {
+		fmt.Println("only one mod req file")
+		return -1
+	}
 
 	req, err := getReq(reqLoc)
 	if err != nil {
