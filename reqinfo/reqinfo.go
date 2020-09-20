@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net/url"
 
-	"github.com/bantl23/gomodreq/origin"
+	"github.com/bantl23/gomodreq/source"
 	"gopkg.in/yaml.v2"
 )
 
@@ -22,7 +22,7 @@ func GetReqInfo(loc string) (*ReqInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("unable to parse uri %s [%+v]", uri, err)
 	}
-	data, err := origin.GetData(uri)
+	data, err := source.GetData(uri)
 	if err != nil {
 		return nil, err
 	}
