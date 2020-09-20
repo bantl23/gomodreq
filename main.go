@@ -23,15 +23,22 @@ func checkRequired(ri *reqinfo.ReqInfo, mi []*modinfo.ModulePublic, exitCode int
 		modvers := mi[i].Version
 		_, ok := ri.Required[path]
 		if ok == true {
-			re, err := regexp.Compile(ri.Required[path])
-			if err != nil {
-				return exitCode, fmt.Errorf("unable to compile regex %s [%+v]", ri.Required[path], err)
-			}
-			if !re.Match([]byte(modvers)) {
-				fmt.Printf("error package %s version %s does not met requirements [regex is %s]\n", path, modvers, ri.Required[path])
-				exitCode = 1
+			if ri.Required[path] == "latest" {
+				if mi[i].Update != nil {
+					fmt.Printf("error package %s version %s is not the latest version [latest=%s]\n", path, modvers, mi[i].Update.Version)
+					exitCode = 1
+				}
 			} else {
-				fmt.Printf("required: %s met\n", path)
+				re, err := regexp.Compile(ri.Required[path])
+				if err != nil {
+					return exitCode, fmt.Errorf("unable to compile regex %s [%+v]", ri.Required[path], err)
+				}
+				if !re.Match([]byte(modvers)) {
+					fmt.Printf("error package %s version %s does not met requirements [regex is %s]\n", path, modvers, ri.Required[path])
+					exitCode = 1
+				} else {
+					fmt.Printf("required: %s met\n", path)
+				}
 			}
 		}
 	}
@@ -45,15 +52,20 @@ func checkBanned(ri *reqinfo.ReqInfo, mi []*modinfo.ModulePublic, exitCode int) 
 		_, ok := ri.Banned[path]
 		if ok == true {
 			for j := range ri.Banned[path] {
-				re, err := regexp.Compile(ri.Banned[path][j])
-				if err != nil {
-					return exitCode, fmt.Errorf("unable to compile regex %s [%+v]", ri.Banned[path][j], err)
-				}
-				if re.Match([]byte(modvers)) {
-					fmt.Printf("error package %s version %s is banned [regex is %s]\n", path, modvers, ri.Banned[path][j])
+				if ri.Banned[path][j] == "latest" && mi[i].Update == nil {
+					fmt.Printf("error package %s version %s is the latest version which is banned\n", path, modvers)
 					exitCode = 2
 				} else {
-					fmt.Printf("banned: %s met\n", path)
+					re, err := regexp.Compile(ri.Banned[path][j])
+					if err != nil {
+						return exitCode, fmt.Errorf("unable to compile regex %s [%+v]", ri.Banned[path][j], err)
+					}
+					if re.Match([]byte(modvers)) {
+						fmt.Printf("error package %s version %s is banned [regex is %s]\n", path, modvers, ri.Banned[path][j])
+						exitCode = 2
+					} else {
+						fmt.Printf("banned: %s met\n", path)
+					}
 				}
 			}
 		}
