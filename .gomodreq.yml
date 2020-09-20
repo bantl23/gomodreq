@@ -1,6 +1,5 @@
 required:
-  golang.org/x/mod: v0.3.0
   gopkg.in/yaml.v2: v2.3.0
 banned:
-  golang.org/x/mod:
-    - v0.2.0
+  gopkg.in/yaml.v2:
+    - v2.2.8
