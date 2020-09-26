@@ -2,10 +2,17 @@ package run
 
 import (
 	"fmt"
+	"html"
 	"regexp"
+	"strconv"
 
 	"github.com/bantl23/gomodreq/modinfo"
 	"github.com/bantl23/gomodreq/reqinfo"
+)
+
+var (
+	check = html.UnescapeString("\033[32m" + "&#" + strconv.Itoa(0x2705) + ";" + "\033[0m")
+	cross = html.UnescapeString("\033[31m" + "&#" + strconv.Itoa(0x274e) + ";" + "\033[0m")
 )
 
 func checkRequired(ri *reqinfo.ReqInfo, mi []*modinfo.ModulePublic, exitCode int) (int, error) {
@@ -14,9 +21,9 @@ func checkRequired(ri *reqinfo.ReqInfo, mi []*modinfo.ModulePublic, exitCode int
 		modvers := mi[i].Version
 		_, ok := ri.Required[path]
 		if ok == true {
+			icon := cross
 			if ri.Required[path] == "latest" {
 				if mi[i].Update != nil {
-					fmt.Printf("error package %s version %s is not the latest version [latest=%s]\n", path, modvers, mi[i].Update.Version)
 					exitCode = 1
 				}
 			} else {
@@ -25,12 +32,12 @@ func checkRequired(ri *reqinfo.ReqInfo, mi []*modinfo.ModulePublic, exitCode int
 					return exitCode, fmt.Errorf("unable to compile regex %s [%+v]", ri.Required[path], err)
 				}
 				if !re.Match([]byte(modvers)) {
-					fmt.Printf("error package %s version %s does not met requirements [regex is %s]\n", path, modvers, ri.Required[path])
 					exitCode = 1
 				} else {
-					fmt.Printf("required: %s met\n", path)
+					icon = check
 				}
 			}
+			fmt.Printf("required: %s %s\n", path, icon)
 		}
 	}
 	return exitCode, nil
@@ -43,8 +50,8 @@ func checkBanned(ri *reqinfo.ReqInfo, mi []*modinfo.ModulePublic, exitCode int) 
 		_, ok := ri.Banned[path]
 		if ok == true {
 			for j := range ri.Banned[path] {
+				icon := cross
 				if ri.Banned[path][j] == "latest" && mi[i].Update == nil {
-					fmt.Printf("error package %s version %s is the latest version which is banned\n", path, modvers)
 					exitCode = 2
 				} else {
 					re, err := regexp.Compile(ri.Banned[path][j])
@@ -52,12 +59,12 @@ func checkBanned(ri *reqinfo.ReqInfo, mi []*modinfo.ModulePublic, exitCode int) 
 						return exitCode, fmt.Errorf("unable to compile regex %s [%+v]", ri.Banned[path][j], err)
 					}
 					if re.Match([]byte(modvers)) {
-						fmt.Printf("error package %s version %s is banned [regex is %s]\n", path, modvers, ri.Banned[path][j])
 						exitCode = 2
 					} else {
-						fmt.Printf("banned: %s met\n", path)
+						icon = check
 					}
 				}
+				fmt.Printf("banned:   %s %s\n", path, icon)
 			}
 		}
 	}
@@ -93,9 +100,11 @@ func Run(reqLoc []string) int {
 		}
 	}
 
+	icon := cross
 	if reqExitCode == 0 && banExitCode == 0 {
-		fmt.Println("All module requirements met")
+		icon = check
 	}
+	fmt.Printf("all:      %s\n", icon)
 
 	return reqExitCode + banExitCode
 }
