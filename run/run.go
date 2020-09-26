@@ -2,17 +2,15 @@ package run
 
 import (
 	"fmt"
-	"html"
 	"regexp"
-	"strconv"
 
 	"github.com/bantl23/gomodreq/modinfo"
 	"github.com/bantl23/gomodreq/reqinfo"
 )
 
 var (
-	check = html.UnescapeString("\033[32m" + "&#" + strconv.Itoa(0x2705) + ";" + "\033[0m")
-	cross = html.UnescapeString("\033[31m" + "&#" + strconv.Itoa(0x274e) + ";" + "\033[0m")
+	check = "good"
+	cross = "fail"
 )
 
 func checkRequired(ri *reqinfo.ReqInfo, mi []*modinfo.ModulePublic, exitCode int) (int, error) {
